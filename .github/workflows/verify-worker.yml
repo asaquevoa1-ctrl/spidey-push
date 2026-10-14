@@ -1,0 +1,44 @@
+name: Verificar alertas publicados
+on:
+  push:
+    paths:
+      - '.github/workflows/verify-worker.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Aguardar primeiro ciclo saudável do agendador
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, time
+          from datetime import datetime, timezone
+          import urllib.request
+          base='https://spidey-push.spursander.workers.dev'
+          for n in range(1, 21):
+              try:
+                  with urllib.request.urlopen(base+'/health',timeout=10) as r:
+                      health=json.load(r)
+                  with urllib.request.urlopen(base+'/api/push/public-key',timeout=10) as r:
+                      pub=json.load(r)
+                  scheduler=health.get('push',{}).get('scheduler') or {}
+                  checked=scheduler.get('checked_at')
+                  age=999999
+                  if checked:
+                      age=(datetime.now(timezone.utc)-datetime.fromisoformat(checked.replace('Z','+00:00'))).total_seconds()
+                  ready=(health.get('push',{}).get('available') is True and isinstance(pub.get('publicKey'),str) and len(pub['publicKey'])>10 and scheduler.get('status')=='ok' and 0<=age<=2700)
+                  print(f'Attempt {n}: push={health.get("push",{}).get("available")} public_key={bool(pub.get("publicKey"))} cron={scheduler.get("status")} last_check_age_seconds={age:.0f}',flush=True)
+                  if ready:
+                      print('SPIDEY_PUSH_HEALTH_READY',flush=True)
+                      break
+              except Exception as exc:
+                  print(f'Attempt {n}: public check error={type(exc).__name__}: {str(exc)[:90]}',flush=True)
+              if n<20:
+                  time.sleep(13)
+          else:
+              raise SystemExit('SPIDEY_PUSH_NOT_READY')
+          PY
